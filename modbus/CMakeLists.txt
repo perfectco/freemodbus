@@ -1,0 +1,8 @@
+add_library(freemodbus mb.c)
+add_subdirectory(ascii)
+add_subdirectory(functions)
+add_subdirectory(rtu)
+add_subdirectory(tcp)
+target_include_directories(freemodbus PRIVATE tcp rtu ascii)
+target_include_directories(freemodbus PUBLIC include)
+target_link_libraries(freemodbus ascii functions rtu tcp)
