@@ -68,7 +68,7 @@ typedef enum
 static volatile eMBSndState eSndState;
 static volatile eMBRcvState eRcvState;
 
-volatile UCHAR  ucRTUBuf[MB_SER_PDU_SIZE_MAX];
+volatile UCHAR  ucRTUBuf[MB_SER_PDU_SIZE_MAX + 1];
 
 static volatile UCHAR *pucSndBufferCur;
 static volatile USHORT usSndBufferCount;
@@ -125,14 +125,13 @@ void
 eMBRTUStart( void )
 {
     ENTER_CRITICAL_SECTION(  );
-    /* Initially the receiver is in the state STATE_RX_INIT. we start
-     * the timer and if no character is received within t3.5 we change
-     * to STATE_RX_IDLE. This makes sure that we delay startup of the
-     * modbus protocol stack until the bus is free.
+    /* For MODBUS compliance, this should start in the IDLE state.
+     * But, the worst thing that will happen for a slave device is
+     * receiving a partial packet. For master devices, todo, need
+     * to revisit if this would cause more serious problems.
      */
-    eRcvState = STATE_RX_INIT;
+    eRcvState = STATE_RX_IDLE;
     vMBPortSerialEnable( TRUE, FALSE );
-    vMBPortTimersEnable(  );
 
     EXIT_CRITICAL_SECTION(  );
 }
@@ -229,9 +228,6 @@ xMBRTUReceiveFSM( void )
 
     assert( eSndState == STATE_TX_IDLE );
 
-    /* Always read the character. */
-    ( void )xMBPortSerialGetByte( ( CHAR * ) & ucByte );
-
     switch ( eRcvState )
     {
         /* If we have received a character in the init state we have to
@@ -253,13 +249,11 @@ xMBRTUReceiveFSM( void )
          * receiver is in the state STATE_RX_RECEIVCE.
          */
     case STATE_RX_IDLE:
+        //reset buffer position
         usRcvBufferPos = 0;
-        ucRTUBuf[usRcvBufferPos++] = ucByte;
         eRcvState = STATE_RX_RCV;
 
-        /* Enable t3.5 timers. */
-        vMBPortTimersEnable(  );
-        break;
+        //vvv fall through vvv
 
         /* We are currently receiving a frame. Reset the timer after
          * every character received. If more than the maximum possible
@@ -267,14 +261,17 @@ xMBRTUReceiveFSM( void )
          * ignored.
          */
     case STATE_RX_RCV:
-        if( usRcvBufferPos < MB_SER_PDU_SIZE_MAX )
-        {
-            ucRTUBuf[usRcvBufferPos++] = ucByte;
-        }
-        else
+        //receive available bytes up to remaining space in receive buffer
+        //update buffer position at the same time
+        usRcvBufferPos += xMBPortSerialGetByte(ucRTUBuf + usRcvBufferPos, sizeof(ucRTUBuf)/sizeof(ucRTUBuf[0]) - usRcvBufferPos);
+
+        //ucRTUBuf is one byte longer than max to detect over-length transmissions
+
+        if( usRcvBufferPos > MB_SER_PDU_SIZE_MAX )
         {
             eRcvState = STATE_RX_ERROR;
         }
+        //left for compatibility with ports that do per byte transmission and reception
         vMBPortTimersEnable(  );
         break;
     }
@@ -301,11 +298,12 @@ xMBRTUTransmitFSM( void )
         /* check if we are finished. */
         if( usSndBufferCount != 0 )
         {
-            xMBPortSerialPutByte( ( CHAR )*pucSndBufferCur );
-            pucSndBufferCur++;  /* next byte in sendbuffer. */
-            usSndBufferCount--;
+            const USHORT usBytesSent = xMBPortSerialPutByte( pucSndBufferCur, usSndBufferCount );
+            pucSndBufferCur += usBytesSent;  /* next byte in sendbuffer. */
+            usSndBufferCount -= usBytesSent;
         }
-        else
+
+        if( usSndBufferCount == 0 )
         {
             xNeedPoll = xMBPortEventPost( EV_FRAME_SENT );
             /* Disable transmitter. This prevents another transmit buffer
