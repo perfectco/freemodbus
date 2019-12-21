@@ -301,10 +301,7 @@ xMBRTUTransmitFSM( void )
             const USHORT usBytesSent = xMBPortSerialPutByte( pucSndBufferCur, usSndBufferCount );
             pucSndBufferCur += usBytesSent;  /* next byte in sendbuffer. */
             usSndBufferCount -= usBytesSent;
-        }
-
-        if( usSndBufferCount == 0 )
-        {
+        } else {
             xNeedPoll = xMBPortEventPost( EV_FRAME_SENT );
             /* Disable transmitter. This prevents another transmit buffer
              * empty interrupt. */
